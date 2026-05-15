@@ -2,8 +2,11 @@
 <html lang="en">
     <head>
         <meta charset="utf-8" />
-        <!-- Base, change this is you want! (or need) -->
-        <base href="https://cdn.jsdelivr.net/gh/zynq-projects/hollow-knight@4a655f1a52f43e007bebe4ef3bcc1957dd197558/" />
+        <!-- Base URL - change this once to update all paths -->
+        <script>
+            window.BASE_URL = "https://cdn.jsdelivr.net/gh/zynq-projects/hollow-knight@latest/";
+        </script>
+        <base href="https://cdn.jsdelivr.net/gh/zynq-projects/hollow-knight@latest/" />
 
         <style>
             html,
@@ -82,6 +85,7 @@
         </div>
         <script>
             const CONFIG = { partsCount: 42, concurrency: 8 };
+            const BASE_URL = window.BASE_URL;
 
             const unityCanvas = document.getElementById("unity-canvas");
             const snapCanvas = document.getElementById("snapshot-canvas");
@@ -125,6 +129,7 @@
             window.addEventListener("focus", () => setPause(false));
 
             async function loadGame() {
+                // Load the split data parts (part1, part2, etc.)
                 let chunks = [];
                 for (
                     let i = 1;
@@ -139,7 +144,7 @@
                             ),
                         },
                         (_, k) =>
-                            fetch(`./Build/hk.data.part${i + k}`).then((r) =>
+                            fetch(`${BASE_URL}Build/hk.data.part${i + k}`).then((r) =>
                                 r.arrayBuffer(),
                             ),
                     );
@@ -147,7 +152,7 @@
                     results.forEach((buf, idx) => {
                         chunks[i + idx - 1] = new Uint8Array(buf);
                     });
-                    barFill.style.transform = `scaleX(${((i + batch.length) / CONFIG.partsCount) * 0.85})`;
+                    barFill.style.transform = `scaleX(${((i + batch.length) / CONFIG.partsCount) * 0.7})`;
                 }
 
                 const totalSize = chunks.reduce((a, c) => a + c.length, 0);
@@ -160,39 +165,70 @@
                 }
                 chunks = null;
 
-                const url = URL.createObjectURL(new Blob([combined]));
+                const dataUrl = URL.createObjectURL(new Blob([combined]));
                 combined = null;
 
+                // Load the split wasm parts (part1 and part2)
+                console.log("Loading split wasm parts...");
+                
+                const wasmPart1Response = await fetch(`${BASE_URL}Build/hk.wasm.part1`);
+                const wasmPart2Response = await fetch(`${BASE_URL}Build/hk.wasm.part2`);
+                
+                if (!wasmPart1Response.ok || !wasmPart2Response.ok) {
+                    throw new Error("Cannot find hk.wasm.part1 or hk.wasm.part2");
+                }
+                
+                const wasmPart1Blob = await wasmPart1Response.blob();
+                const wasmPart2Blob = await wasmPart2Response.blob();
+                
+                const wasmTotalSize = wasmPart1Blob.size + wasmPart2Blob.size;
+                console.log(`Wasm Part1 size: ${wasmPart1Blob.size}, Part2 size: ${wasmPart2Blob.size}, Total: ${wasmTotalSize}`);
+                
+                const wasmCombinedArray = new Uint8Array(wasmTotalSize);
+                
+                const wasmPart1Buffer = await wasmPart1Blob.arrayBuffer();
+                const wasmPart2Buffer = await wasmPart2Blob.arrayBuffer();
+                
+                wasmCombinedArray.set(new Uint8Array(wasmPart1Buffer), 0);
+                wasmCombinedArray.set(new Uint8Array(wasmPart2Buffer), wasmPart1Blob.size);
+                
+                const wasmBlob = new Blob([wasmCombinedArray], { type: "application/wasm" });
+                const wasmUrl = URL.createObjectURL(wasmBlob);
+
                 const script = document.createElement("script");
-                script.src = "./Build/hk.loader.js";
+                script.src = `${BASE_URL}Build/hk.loader.js`;
                 document.body.appendChild(script);
 
                 script.onload = () => {
                     createUnityInstance(
                         unityCanvas,
                         {
-                            dataUrl: url,
-                            frameworkUrl: "Build/hk.framework.js",
-                            codeUrl:
-                                "https://raw.githubusercontent.com/zynq-platform/hollow-knight/main/Build/hk.wasm",
-                            streamingAssetsUrl: "./Build/StreamingAssets",
+                            dataUrl: dataUrl,
+                            frameworkUrl: `${BASE_URL}Build/hk.framework.js`,
+                            codeUrl: wasmUrl,
+                            streamingAssetsUrl: `${BASE_URL}Build/StreamingAssets`,
                             companyName: "Team Cherry",
                             productName: "Hollow Knight",
                             devicePixelRatio: 1,
                             powerPreference: "high-performance",
                         },
                         (p) => {
-                            barFill.style.transform = `scaleX(${0.85 + p * 0.15})`;
+                            barFill.style.transform = `scaleX(${0.7 + p * 0.3})`;
                         },
                     ).then((ui) => {
                         unityInstance = ui;
-                        URL.revokeObjectURL(url);
+                        URL.revokeObjectURL(dataUrl);
+                        URL.revokeObjectURL(wasmUrl);
                         document.getElementById("loading").remove();
+                    }).catch((error) => {
+                        console.error("Unity failed to start:", error);
+                        URL.revokeObjectURL(dataUrl);
+                        URL.revokeObjectURL(wasmUrl);
                     });
                 };
             }
 
-            loadGame().catch(() => console.log("Init failed"));
+            loadGame().catch((err) => console.log("Init failed:", err));
 
             window.alert = () => {};
             new MutationObserver((m) =>
